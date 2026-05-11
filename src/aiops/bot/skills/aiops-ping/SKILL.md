@@ -17,7 +17,7 @@ Use this skill when you need to confirm the AIOps Hermes plugin is packaged and 
 
 Typical triggers:
 - You just installed or updated the AIOps plugin package.
-- You need to verify Hermes can discover the `hermes_agent.plugins` entry points.
+- You need to verify Hermes can discover the `hermes_agent.plugins` plugin entry point and load the `aiops` plugin.
 - You want a low-risk boundary probe before implementing real hooks, tools, or bot workflows.
 - You need to separate packaging/discovery failures from runtime business-logic failures.
 
@@ -36,12 +36,10 @@ Expected entry-point group:
 hermes_agent.plugins
 ```
 
-Expected entry-point names:
+Expected plugin entry point:
 
 ```text
-aiops_hooks
-aiops_tools
-aiops_bot
+aiops
 ```
 
 Primary manual verification command:
@@ -58,14 +56,14 @@ HERMES_PLUGINS_DEBUG=1 hermes plugins list
 
 ## Procedure
 1. Confirm the AIOps package is installed in the same environment Hermes uses.
-2. Check that Hermes can discover the plugin entry points.
-3. Verify the expected plugin names appear: `aiops_hooks`, `aiops_tools`, `aiops_bot`.
+2. Check that Hermes can discover the plugin entry point.
+3. Verify the expected plugin name appears: `aiops`.
 4. Trigger the `aiops_ping` tool as the lowest-risk runtime probe.
 5. Confirm the returned payload is valid JSON and contains `success: true` and a `pong` message.
 6. If discovery succeeds but the ping probe fails, classify the issue as handler/runtime wiring rather than packaging.
 
 ## Decision Points
-- If `hermes plugins list` does not show the three expected entry points, stop and debug packaging/discovery first.
+- If `hermes plugins list` does not show the expected `aiops` plugin, stop and debug packaging/discovery first.
 - If the entry points are present but `aiops_ping` fails, inspect tool registration and handler wiring.
 - If the ping probe succeeds, proceed to the next integration task instead of expanding this skill further.
 
@@ -77,7 +75,7 @@ HERMES_PLUGINS_DEBUG=1 hermes plugins list
 
 ## Verification
 Success means all of the following are true:
-- Hermes can discover the AIOps plugin entry points.
-- The plugin names `aiops_hooks`, `aiops_tools`, and `aiops_bot` are visible.
+- Hermes can discover the AIOps plugin entry point.
+- The plugin name `aiops` is visible.
 - The `aiops_ping` probe returns a JSON payload with `success: true`.
 - No additional runtime-only assumptions are made beyond packaging and boundary wiring.

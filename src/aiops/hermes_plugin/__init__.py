@@ -1,10 +1,4 @@
-"""Hermes plugin entry points for AIOps integration boundary probing.
-
-The external Hermes VM will load these functions through the
-``hermes_agent.plugins`` entry-point group. Task 0 keeps the implementation
-minimal and side-effect free so discovery can be validated before deeper
-integration work begins.
-"""
+"""Hermes plugin entry point for AIOps integration boundary probing."""
 
 from __future__ import annotations
 
@@ -14,25 +8,23 @@ from typing import Any
 from aiops.hermes_plugin import hooks, tools
 
 
-def register_hooks(ctx: Any | None = None) -> list[str]:
-    """Register minimal Hermes hooks when a plugin context is provided.
+def _register_hooks(ctx: Any) -> list[str]:
+    """Register minimal Hermes hooks for Task 0.
 
     Args:
-        ctx: Hermes plugin context. When absent, the function returns the
-            boundary names that would be registered.
+        ctx: Hermes plugin context.
 
     Returns:
         Hook names exposed by the plugin.
     """
-    if ctx is not None:
-        ctx.register_hook("gateway:webhook_received", hooks.ping)
-        ctx.register_hook("post_tool_call", hooks.log_post_tool_call)
+    ctx.register_hook("gateway:webhook_received", hooks.ping)
+    ctx.register_hook("post_tool_call", hooks.log_post_tool_call)
 
     return ["gateway:webhook_received", "post_tool_call"]
 
 
-def register_tools(ctx: Any | None = None) -> list[str]:
-    """Register a minimal ping tool when a plugin context is provided.
+def _register_tools(ctx: Any) -> list[str]:
+    """Register a minimal ping tool for Task 0.
 
     Args:
         ctx: Hermes plugin context.
@@ -40,34 +32,31 @@ def register_tools(ctx: Any | None = None) -> list[str]:
     Returns:
         Tool names exposed by the plugin.
     """
-    if ctx is not None:
-        ctx.register_tool(
-            name="aiops_ping",
-            toolset="aiops",
-            schema=tools.PING_TOOL_SCHEMA,
-            handler=tools.aiops_ping,
-            description="Return a static pong payload for AIOps Hermes integration checks.",
-        )
+    ctx.register_tool(
+        name="aiops_ping",
+        toolset="aiops",
+        schema=tools.PING_TOOL_SCHEMA,
+        handler=tools.aiops_ping,
+        description="Return a static pong payload for AIOps Hermes integration checks.",
+    )
 
     return ["aiops_ping"]
 
 
-def register_bot_commands(ctx: Any | None = None) -> list[str]:
-    """Register the Task 0 CLI/bot command surface when a context is present.
+def _register_cli(ctx: Any) -> list[str]:
+    """Register the Task 0 plugin CLI surface.
 
     Hermes currently exposes plugin CLI registration via ``ctx.register_cli_command``.
-    Task 0 does not add a live handler yet, but the skill path is surfaced so the
-    VM-side Hermes runtime can inspect the packaged skill bundle.
+    Task 0 does not add a live command tree yet; this only proves the plugin can
+    register optional CLI integration without failing discovery.
 
     Args:
         ctx: Hermes plugin context.
 
     Returns:
-        Relative skill bundle paths exposed by the plugin.
+        Registered CLI root names.
     """
-    skill_path = Path(__file__).resolve().parent.parent / "bot" / "skills" / "aiops-ping" / "SKILL.md"
-    if ctx is not None and hasattr(ctx, "register_cli_command"):
-        # Task 0 only proves the command registration surface exists.
+    if hasattr(ctx, "register_cli_command"):
         ctx.register_cli_command(
             name="aiops",
             help="AIOps plugin management commands.",
@@ -75,4 +64,23 @@ def register_bot_commands(ctx: Any | None = None) -> list[str]:
             handler_fn=lambda args: args,
         )
 
+    return ["aiops"]
+
+
+def bundled_skill_paths() -> list[str]:
+    """Return the plugin-bundled skill files shipped with the package."""
+    skill_path = Path(__file__).resolve().parent.parent / "bot" / "skills" / "aiops-ping" / "SKILL.md"
     return [str(skill_path)]
+
+
+def register(ctx: Any) -> None:
+    """Register the full AIOps Hermes plugin.
+
+    Hermes expects one plugin entry point whose target exposes ``register(ctx)``.
+
+    Args:
+        ctx: Hermes plugin registration context.
+    """
+    _register_hooks(ctx)
+    _register_tools(ctx)
+    _register_cli(ctx)

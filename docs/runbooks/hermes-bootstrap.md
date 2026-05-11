@@ -12,10 +12,10 @@ plugin packaging, boundary contracts, and the manual checks to perform inside th
 - Pip-packaged plugins are auto-discovered on Hermes startup after installation.
 - Plugin management and inspection commands include `hermes plugins list` and `/plugins` inside the Hermes runtime.
 - Debug discovery in the VM with `HERMES_PLUGINS_DEBUG=1 hermes plugins list`.
-- Repository entry-point names used by this project:
-  - `aiops_hooks`
-  - `aiops_tools`
-  - `aiops_bot`
+- Repository plugin entry point used by this project:
+  - `aiops`
+- Hermes plugin packages should expose a single `register(ctx)` entry point target.
+- Hermes plugin packages should also ship a `plugin.yaml` manifest.
 
 ## Current Hermes Plugin API Surface
 
@@ -30,6 +30,7 @@ Implication for this repo:
 - There is no confirmed current `@hook` import path to rely on.
 - There is no confirmed current `@tool` import path to rely on.
 - The practical integration boundary for Task 0 is `register_*` functions that Hermes can load via entry points.
+- The practical runtime boundary is one plugin entry point that resolves to `aiops.hermes_plugin:register`.
 
 ## Skill Bundle Format
 
@@ -132,11 +133,7 @@ Run these in the Hermes VM after packaging or editable-installing this repositor
 hermes plugins list
 ```
 
-Expected output includes:
-
-- `aiops_hooks`
-- `aiops_tools`
-- `aiops_bot`
+Expected output includes the `aiops` plugin.
 
 If discovery fails:
 
@@ -145,6 +142,79 @@ HERMES_PLUGINS_DEBUG=1 hermes plugins list
 ```
 
 If the plugin is visible and you want an in-runtime check, use `/plugins` inside Hermes and then trigger the `aiops_ping` probe tool.
+
+## Common Failure: `uv sync` Succeeds But `hermes plugins list` Shows Nothing
+
+This is the most likely cause when entry points exist in the repo but Hermes still cannot see them.
+
+Why it happens:
+
+- `uv sync` installs the current project into the repository virtual environment.
+- `hermes plugins list` uses the Python environment that the `hermes` executable was installed into.
+- If those are different interpreters, Hermes will not see the repo's entry points.
+
+### Quick Proof
+
+Inside the repo in Ubuntu, run:
+
+```bash
+uv run python -c "import importlib.metadata as m; print(sorted(ep.name for ep in m.entry_points(group='hermes_agent.plugins')))"
+```
+
+If this prints:
+
+```text
+['aiops']
+```
+
+then the package metadata is correct in the repo environment.
+
+Next, inspect which Hermes binary you are actually running:
+
+```bash
+which hermes
+head -n 1 "$(which hermes)"
+```
+
+If the shebang points to a different Python interpreter than the repo `.venv`, you have an environment mismatch.
+
+### What To Do
+
+Choose one of these two fixes:
+
+#### Fix A: Install the repo into the Python environment used by Hermes
+
+If Hermes is installed globally, via its own installer, or in another venv, install your plugin package into that same interpreter.
+
+Generic pattern:
+
+```bash
+<python-used-by-hermes> -m pip install -e /path/to/aiops-v2
+hermes plugins list
+```
+
+#### Fix B: Run Hermes from the repo environment
+
+Only use this if Hermes itself is installed in the repo `.venv`.
+
+```bash
+source .venv/bin/activate
+hermes plugins list
+```
+
+or, if Hermes is importable in that environment:
+
+```bash
+uv run hermes plugins list
+```
+
+### Recommended Verification Order
+
+1. `uv run python -c "import importlib.metadata as m; print(sorted(ep.name for ep in m.entry_points(group='hermes_agent.plugins')))"`
+2. `which hermes`
+3. `head -n 1 "$(which hermes)"`
+4. Install the repo into the Hermes interpreter with `pip install -e .`
+5. Re-run `hermes plugins list`
 
 ## Windows Host To VMware Ubuntu Workflow
 

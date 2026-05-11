@@ -11,9 +11,7 @@ requires-python = ">=3.14"
 dependencies = []
 
 [project.entry-points."hermes_agent.plugins"]
-aiops_hooks = "aiops.hermes_plugin:register_hooks"
-aiops_tools = "aiops.hermes_plugin:register_tools"
-aiops_bot = "aiops.hermes_plugin:register_bot_commands"
+aiops = "aiops.hermes_plugin:register"
 
 [project.optional-dependencies]
 dev = [

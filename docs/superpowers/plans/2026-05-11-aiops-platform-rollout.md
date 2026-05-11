@@ -133,13 +133,11 @@ import pytest
 def test_aiops_plugin_registered_under_hermes_entry_point() -> None:
     eps = importlib.metadata.entry_points(group="hermes_agent.plugins")
     names = {ep.name for ep in eps}
-    assert "aiops_hooks" in names
-    assert "aiops_tools" in names
-    assert "aiops_bot" in names
+  assert "aiops" in names
 
 @pytest.mark.hermes_runtime
 def test_hermes_lists_our_plugin_via_cli() -> None:
-    """Run `hermes plugins list` and assert our hooks/tools appear."""
+    """Run `hermes plugins list` and assert the aiops plugin appears."""
     pytest.importorskip("hermes_agent")
     ...
 ```
@@ -153,30 +151,17 @@ def test_hermes_lists_our_plugin_via_cli() -> None:
 
 ```python
 # src/aiops/hermes_plugin/__init__.py
-def register_hooks(ctx=None):
-  if ctx is not None:
-    ctx.register_hook("gateway:webhook_received", hooks.ping)
-  return ["gateway:webhook_received"]
-
-
-def register_tools(ctx=None):
-  if ctx is not None:
-    ctx.register_tool(...)
-  return ["aiops_ping"]
-
-
-def register_bot_commands(ctx=None):
-  if ctx is not None and hasattr(ctx, "register_cli_command"):
+def register(ctx):
+  ctx.register_hook("gateway:webhook_received", hooks.ping)
+  ctx.register_tool(...)
+  if hasattr(ctx, "register_cli_command"):
     ctx.register_cli_command(...)
-  return ["src/aiops/bot/skills/aiops-ping/SKILL.md"]
 ```
 
   Add to `pyproject.toml`:
 ```toml
 [project.entry-points."hermes_agent.plugins"]
-aiops_hooks = "aiops.hermes_plugin:register_hooks"
-aiops_tools = "aiops.hermes_plugin:register_tools"
-aiops_bot   = "aiops.hermes_plugin:register_bot_commands"
+aiops = "aiops.hermes_plugin:register"
 ```
 
 - [ ] **Step 5: Verify Hermes loads us**
@@ -184,7 +169,7 @@ aiops_bot   = "aiops.hermes_plugin:register_bot_commands"
   Run: `uv run pytest tests/integration/test_hermes_plugin_loads.py -v -m "not hermes_runtime"`
   Expected: PASS for entry-point registration.
 
-  Manual: `hermes plugins list` → confirm `aiops_hooks / aiops_tools / aiops_bot` appear.
+  Manual: `hermes plugins list` → confirm `aiops` appears.
 
 - [ ] **Step 6: Document findings in `docs/runbooks/hermes-bootstrap.md`**
 

@@ -1,0 +1,8 @@
+name: aiops
+version: 0.1.0
+description: AIOps Hermes 集成边界探针插件
+provides_tools:
+  - aiops_ping
+provides_hooks:
+  - gateway:webhook_received
+  - post_tool_call
