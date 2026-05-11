@@ -36,7 +36,7 @@ Expected entry-point group:
 hermes_agent.plugins
 ```
 
-Expected plugin entry point:
+Expected plugin name:
 
 ```text
 aiops
@@ -56,7 +56,7 @@ HERMES_PLUGINS_DEBUG=1 hermes plugins list
 
 ## Procedure
 1. Confirm the AIOps package is installed in the same environment Hermes uses.
-2. Check that Hermes can discover the plugin entry point.
+2. Check that Hermes can discover the `aiops` plugin.
 3. Verify the expected plugin name appears: `aiops`.
 4. Trigger the `aiops_ping` tool as the lowest-risk runtime probe.
 5. Confirm the returned payload is valid JSON and contains `success: true` and a `pong` message.
@@ -64,7 +64,7 @@ HERMES_PLUGINS_DEBUG=1 hermes plugins list
 
 ## Decision Points
 - If `hermes plugins list` does not show the expected `aiops` plugin, stop and debug packaging/discovery first.
-- If the entry points are present but `aiops_ping` fails, inspect tool registration and handler wiring.
+- If the `aiops` plugin is visible but `aiops_ping` fails, inspect tool registration and handler wiring.
 - If the ping probe succeeds, proceed to the next integration task instead of expanding this skill further.
 
 ## Pitfalls
