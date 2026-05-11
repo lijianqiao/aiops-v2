@@ -117,7 +117,7 @@
 - [ ] **Step 1: Install Hermes-Agent locally and identify SDK surface**
 
   Read https://hermes-agent.nousresearch.com/docs and document in `docs/runbooks/hermes-bootstrap.md`:
-  - Exact import path for `@hook`, `@tool`, `register_command`
+  - Confirm the current plugin API surface. Current docs indicate `ctx.register_hook(...)`, `ctx.register_tool(...)`, and `ctx.register_cli_command(...)` rather than decorator-based `@hook` / `@tool` imports.
   - Plugin entry-point group name (`hermes_agent.plugins` per §5.5)
   - Skill Markdown frontmatter required keys
   - Config file location and webhook routes schema (cross-check vs §9.2)
@@ -153,9 +153,22 @@ def test_hermes_lists_our_plugin_via_cli() -> None:
 
 ```python
 # src/aiops/hermes_plugin/__init__.py
-def register_hooks(): from . import hooks; return [hooks.ping]
-def register_tools(): from aiops.plugins import read_only; return []  # empty for now
-def register_bot_commands(): return [...]  # /aiops ping skill
+def register_hooks(ctx=None):
+  if ctx is not None:
+    ctx.register_hook("gateway:webhook_received", hooks.ping)
+  return ["gateway:webhook_received"]
+
+
+def register_tools(ctx=None):
+  if ctx is not None:
+    ctx.register_tool(...)
+  return ["aiops_ping"]
+
+
+def register_bot_commands(ctx=None):
+  if ctx is not None and hasattr(ctx, "register_cli_command"):
+    ctx.register_cli_command(...)
+  return ["src/aiops/bot/skills/aiops-ping/SKILL.md"]
 ```
 
   Add to `pyproject.toml`:
@@ -175,7 +188,7 @@ aiops_bot   = "aiops.hermes_plugin:register_bot_commands"
 
 - [ ] **Step 6: Document findings in `docs/runbooks/hermes-bootstrap.md`**
 
-  Include: exact decorator imports, skill file template, where to drop our `bot/skills/*.md`, how Hermes discovers webhook routes YAML, expected env vars.
+  Include: current registration-context API, skill file template, where to drop our `bot/skills/*.md`, how Hermes discovers webhook routes YAML, expected env vars.
 
 - [ ] **Step 7: Commit**
 
@@ -1451,12 +1464,12 @@ git commit -m "feat: phase4 memory lifecycle + eval pipeline + ci regression gat
 
 ## Execution Gates Summary
 
-| Gate | After Task | Required to pass |
-| --- | --- | --- |
-| Phase 1 acceptance | Task 6 | All 7 docker-compose services up; E2E webhook → bot test green; idempotency test green |
-| Phase 2 acceptance | Task 9 | L1 autoexec E2E green; audit_logs visible; kill-switch drill verified; Temporal history replayable |
-| Phase 3 acceptance | Task 10 | Duplicate signal dedup; gateway restart replay; network rollback drill all green |
-| Phase 4 launch | Task 11 | CI eval gate active on PRs; daily sampler cron registered; memory snapshot cron registered |
+| Gate               | After Task | Required to pass                                                                                   |
+| ------------------ | ---------- | -------------------------------------------------------------------------------------------------- |
+| Phase 1 acceptance | Task 6     | All 7 docker-compose services up; E2E webhook → bot test green; idempotency test green             |
+| Phase 2 acceptance | Task 9     | L1 autoexec E2E green; audit_logs visible; kill-switch drill verified; Temporal history replayable |
+| Phase 3 acceptance | Task 10    | Duplicate signal dedup; gateway restart replay; network rollback drill all green                   |
+| Phase 4 launch     | Task 11    | CI eval gate active on PRs; daily sampler cron registered; memory snapshot cron registered         |
 
 ---
 
