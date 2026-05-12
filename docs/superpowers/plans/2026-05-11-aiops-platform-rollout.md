@@ -327,37 +327,73 @@ requires_env:
   - AIOPS_NETBOX_URL
 ```
 
-- [ ] **Step 5: Verify locally**
+- [ ] **Step 5: Verify locally and on the Hermes VM**
+
+  **Local unit / integration tests** (no Hermes runtime needed):
 
   Run: `uv run pytest tests/integration/test_hermes_plugin_loads.py -v -m "not hermes_runtime"`
-  Expected: PASS for all 4 entry-point + manifest + register + role-dispatch tests.
+  Expected: PASS for all entry-point + manifest + register + role-dispatch tests.
 
-  On Ubuntu VM with Hermes installed:
+  **On the Hermes VM — Method A (recommended): Hermes Web Git URL install**
 
-```bash
-cd ~/path/to/aiops-v2
-uv pip install -e .
-# enable
-mkdir -p ~/.hermes && touch ~/.hermes/config.yaml
-yq -i '.plugins.enabled += ["aiops"]' ~/.hermes/config.yaml   # or hand-edit
-# per-instance role (default gateway for the probe)
-export AIOPS_HERMES_INSTANCE=gateway
-# verify
-hermes plugins list
-HERMES_PLUGINS_DEBUG=1 hermes session start 2>&1 | grep -i aiops
-```
+  This is the primary path. Hermes Web clones to `~/.hermes/plugins/aiops/`
+  and uses our repo-root `plugin.yaml` for directory-mode discovery,
+  side-stepping any Python interpreter mismatch.
 
-  Expected: `aiops` appears with **no `no plugin.yaml / __init__.py` warning**.
+  1. Hermes Web → Plugins → Install from GitHub / Git URL
+  2. Enter the repo URL (e.g. `https://github.com/<org>/aiops-v2.git`)
+  3. When prompted **Enable 'aiops' now?**, answer **Yes**
+  4. Edit `~/.hermes/config.yaml` to declare the instance role:
 
-- [ ] **Step 6: Document findings in `docs/runbooks/hermes-bootstrap.md`**
+     ```yaml
+     plugins:
+       enabled:
+         - aiops
+       env:
+         aiops:
+           AIOPS_HERMES_INSTANCE: gateway   # gateway | linux | network | infra
+     ```
 
+  5. Restart Hermes (or use whatever lifecycle action Hermes Web exposes)
+  6. Verify:
+
+     ```bash
+     hermes plugins list                                              # aiops must appear
+     HERMES_PLUGINS_DEBUG=1 hermes plugins list 2>&1 | grep -i aiops  # detailed source path
+     ```
+
+  Expected: `aiops` listed with **no `has no plugin.yaml / __init__.py` warning**.
+
+  **Method B (fallback): pip editable install**
+
+  Use only if you cannot use Method A, or if you need editable installs
+  for in-place development against a live Hermes:
+
+  ```bash
+  # Identify the Python interpreter Hermes uses (interpreter mismatch is the
+  # #1 cause of "uv sync succeeds but Hermes sees nothing")
+  which hermes
+  head -n 1 "$(which hermes)"
+
+  # Install into THAT interpreter, not the repo .venv
+  <python-used-by-hermes> -m pip install -e /path/to/aiops-v2
+
+  # Configure + verify same as Method A
+  ```
+
+  See `docs/runbooks/hermes-bootstrap.md` for the full troubleshooting matrix.
+
+- [ ] **Step 6: Update `docs/runbooks/hermes-bootstrap.md` to match reality**
+
+  The runbook must lead with **Method A (Hermes Web Git URL install)** as the
+  recommended path and document `pip install -e .` only as the dev fallback.
   Cover:
-  - Discovery sources order (bundled → user → project → pip entry-point)
-  - directory-mode requirements (`plugin.yaml` + `__init__.py` at the **scanned root**)
-  - Why we use hybrid mode (pip entry-point + repo-root `plugin.yaml`)
-  - How to enable a plugin (`~/.hermes/config.yaml`)
-  - How `AIOPS_HERMES_INSTANCE` env var selects the role-specific subset
-  - Local dev workflow: `ln -s ~/work/aiops-v2 ~/.hermes/plugins/aiops` for hot iteration
+  - Method A step-by-step (Hermes Web UI flow, `~/.hermes/config.yaml` env block)
+  - Method B for editable dev installs + interpreter-mismatch troubleshooting
+  - Discovery sources reference table (bundled / user / project / pip entry-point)
+  - Per-instance role table (`AIOPS_HERMES_INSTANCE` → registered subset)
+  - Common failures + fixes (incl. the v3.5 `aiops-v2 has no plugin.yaml` regression)
+  - Update / reload workflow for each method
   - Tool handler hard rules: JSON string return, never raise, accept `**kwargs`
 
 - [ ] **Step 7: Commit**
