@@ -58,6 +58,3 @@ uv run mypy src
   with Python 3.14 or greater`。当前测试和运行链路未受影响，但 Langfuse
   在某些路径上可能行为不稳定。**推荐生产部署使用 Python 3.13**，等 Langfuse
   上游修复后再升级到 3.14。
-- **docker compose 端口冲突**：本地编排里 `prometheus` 和 `minio` 都映射到主机 9090 端口，
-  `docker compose up` 会因端口被占用失败。部署到 Ubuntu VM 前，请把 `prometheus.ports`
-  改为 `"9092:9090"`（或重新分配 `minio` 的主机端口）。
