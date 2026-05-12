@@ -83,6 +83,7 @@ asyncio_mode = "auto"
 testpaths = ["tests"]
 markers = [
     "hermes_runtime: requires Hermes runtime from the external VM environment",
+    "integration: requires local docker infrastructure",
 ]
 
 [tool.hatch.build.targets.wheel]

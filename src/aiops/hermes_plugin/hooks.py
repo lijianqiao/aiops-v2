@@ -10,6 +10,7 @@ import structlog
 from aiops.gateway.hooks import dedupe_and_persist
 from aiops.gateway.services import build_service_bundle
 from aiops.lifecycle import shutdown
+from aiops.observability.langfuse_client import record_gateway_webhook_trace
 from aiops.plugins.sanitize import sanitize_prompt_messages
 
 
@@ -74,7 +75,18 @@ async def on_webhook_received(payload: dict[str, Any], route_name: str, **_: Any
     """
     try:
         service_bundle = await build_service_bundle()
-        return await dedupe_and_persist(payload, route_name, service_bundle)
+        result = await dedupe_and_persist(payload, route_name, service_bundle)
+        try:
+            await record_gateway_webhook_trace(
+                source_event_id=payload["event"]["eventid"],
+                route_name=route_name,
+                payload=payload,
+                action=result.action,
+                risk_level=result.payload.get("_risk_level"),
+            )
+        except Exception as error:  # noqa: BLE001
+            structlog.get_logger().error("langfuse_trace_failed", error=str(error), route_name=route_name)
+        return result
     except Exception as error:  # noqa: BLE001
         structlog.get_logger().error("webhook_hook_failed", error=str(error), route_name=route_name)
         return None

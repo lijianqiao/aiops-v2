@@ -1,0 +1,13 @@
+model_list:
+  - model_name: fake-openai-endpoint
+    litellm_params:
+      model: openai/fake-model
+      api_key: fake-key
+      api_base: https://example.invalid
+
+general_settings:
+  master_key: sk-litellm-local
+
+litellm_settings:
+  drop_params: true
+  telemetry: false

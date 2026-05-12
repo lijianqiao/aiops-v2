@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import Select, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from aiops.db.models import Alert, ApprovalRecord, WorkflowRecord
@@ -78,6 +79,20 @@ class AlertRepository:
             raw_payload=raw_payload,
         )
         return await self.add(alert)
+
+    async def list_recent(self, *, since: datetime | None = None, limit: int = 20) -> list[Alert]:
+        """Return recent alerts ordered newest-first.
+
+        Args:
+            since: Optional lower bound for ``received_at``.
+            limit: Maximum number of rows to return.
+        """
+        query: Select[tuple[Alert]] = select(Alert).order_by(Alert.received_at.desc()).limit(limit)
+        if since is not None:
+            query = query.where(Alert.received_at >= since)
+
+        result = await self.session.execute(query)
+        return list(result.scalars().all())
 
 
 @dataclass(slots=True)
