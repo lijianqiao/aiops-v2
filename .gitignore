@@ -11,7 +11,7 @@ wheels/
 
 # user-specific files
 .claude/
-docs/superpower/*
+docs/superpowers/
 .pytest_cache/
 .ruff_cache/
 .mypy_cache/
