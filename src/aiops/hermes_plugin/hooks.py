@@ -10,6 +10,7 @@ import structlog
 from aiops.gateway.hooks import dedupe_and_persist
 from aiops.gateway.services import build_service_bundle
 from aiops.lifecycle import shutdown
+from aiops.plugins.sanitize import sanitize_prompt_messages
 
 
 def ping(*_: Any, **__: Any) -> None:
@@ -32,10 +33,33 @@ def register_safety_hooks(ctx: Any, *, role: str) -> None:
 
     Args:
         ctx: Hermes plugin registration context.
-        role: Active Hermes instance role.
+        role: Active Hermes instance role. Currently unused but reserved
+            for Task 7 where the LLM-layer kill-switch will scope itself
+            by ``kill_switch:hermes_instance:{role}`` and the cost cap
+            will tag metrics with the role.
     """
-    del role
+    del role  # reserved for Task 7 LLM-layer kill-switch / cost cap
+    ctx.register_hook("pre_llm_call", on_pre_llm_call)
     ctx.register_hook("post_tool_call", log_post_tool_call)
+
+
+async def on_pre_llm_call(session_id: str, user_message: str, conversation_history: Any, **_: Any) -> Any:
+    """Sanitize untrusted prompt blocks before Hermes calls the LLM.
+
+    Args:
+        session_id: Hermes session identifier.
+        user_message: Raw end-user message.
+        conversation_history: Prompt container carrying untrusted blocks.
+
+    Returns:
+        Sanitized prompt payload, or ``None`` if sanitization fails.
+    """
+    del session_id
+    try:
+        return await sanitize_prompt_messages(user_message, conversation_history)
+    except Exception as error:  # noqa: BLE001
+        structlog.get_logger().error("sanitize_failed", error=str(error))
+        return None
 
 
 async def on_webhook_received(payload: dict[str, Any], route_name: str, **_: Any) -> Any:

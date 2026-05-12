@@ -15,7 +15,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from aiops.hermes_plugin import hooks, tools
+from aiops.hermes_plugin import commands_registry, hooks, tools, tools_registry
 from aiops.settings import HermesRole, Settings
 
 
@@ -32,10 +32,13 @@ def _read_role() -> HermesRole:
 def _register_always_on(ctx: Any, role: HermesRole) -> None:
     """Register hooks and tools that every Hermes instance gets.
 
-    Task 0 surface: the ``aiops_ping`` tool and a no-op ``post_tool_call``
-    hook act as a connectivity probe. Subsequent tasks (4 / 5 / 7) add
-    safety hooks here: ``pre_llm_call`` (prompt injection), kill-switch LLM
-    layer, cost cap, and ``pre_tool_call`` (hallucination guard early-fail).
+    Currently wired:
+        - ``aiops_ping`` tool (Task 0 connectivity probe)
+        - ``pre_llm_call`` prompt-injection sanitizer (Task 5)
+        - ``post_tool_call`` observability hook (Task 0)
+
+    Task 7 / 8 / 9 will add the LLM-layer kill-switch, cost cap, and
+    ``pre_tool_call`` hallucination guard alongside the existing hooks.
     """
     hooks.register_safety_hooks(ctx, role=role)
 
@@ -51,36 +54,45 @@ def _register_always_on(ctx: Any, role: HermesRole) -> None:
 def _register_gateway(ctx: Any) -> None:
     """Register hooks and commands specific to the gateway role.
 
-    The gateway instance owns webhook ingestion and the 飞书 Bot command
-    surface. Business tool credentials must NOT be loaded here (§6.3).
-    Task 4 fills in the real ``gateway:webhook_received`` body; Task 5
-    fills in slash commands via ``ctx.register_command``.
+    The gateway instance owns webhook ingestion (Task 4
+    ``gateway:webhook_received``) and the 飞书 Bot slash command surface
+    (Task 5 ``ctx.register_command``). Business tool credentials must
+    NOT be loaded here (§6.3).
     """
     hooks.register_webhook_hooks(ctx)
+    commands_registry.register_bot_commands(ctx)
 
 
 def _register_linux(ctx: Any) -> None:
-    """Register Linux / Windows server tools. Filled in by Task 5 (read-only) and Task 9 (writes)."""
-    # Task 5: ctx.register_tool(name="get_disk_usage", schema=..., handler=...)
-    # Task 5: ctx.register_tool(name="get_systemd_status", schema=..., handler=...)
-    # Task 9: ctx.register_tool(name="restart_service", schema=..., handler=...)
-    # Task 9: ctx.register_tool(name="cleanup_disk", schema=..., handler=...)
-    return None
+    """Register Linux / Windows server tools.
+
+    Task 5 wires the read-only triage tools (``get_disk_usage``,
+    ``get_systemd_status``). Task 9 will add the write tools
+    (``restart_service``, ``cleanup_disk``) once the production
+    :class:`LinuxTransport` wrapper lands.
+    """
+    tools_registry.register_linux_tools(ctx)
 
 
 def _register_network(ctx: Any) -> None:
-    """Register network device tools (H3C / Huawei / Cisco). Filled in by Task 5 / 9."""
-    # Task 5: ctx.register_tool(name="get_interface_status", ...)
-    # Task 5: ctx.register_tool(name="get_ospf_neighbors", ...)
-    # Task 9: ctx.register_tool(name="shutdown_interface", ...)
-    return None
+    """Register network device tools (H3C / Huawei / Cisco).
+
+    Task 5 wires the read-only triage tools (``get_interface_status``,
+    ``get_ospf_neighbors``). Task 9 will add the write tools
+    (``shutdown_interface``, etc.) using the Scrapli-backed
+    :class:`NetworkTransport` wrapper.
+    """
+    tools_registry.register_network_tools(ctx)
 
 
 def _register_infra(ctx: Any) -> None:
-    """Register DB / Zabbix-self tools. Filled in by Task 5."""
-    # Task 5: ctx.register_tool(name="pg_check_replication_lag", ...)
-    # Task 5: ctx.register_tool(name="redis_inspect_memory", ...)
-    return None
+    """Register DB / Zabbix-self tools.
+
+    Task 5 leaves this as a placeholder; concrete handlers
+    (``pg_check_replication_lag``, ``redis_inspect_memory``) land in a
+    later iteration once the infra service bundle stabilizes.
+    """
+    tools_registry.register_infra_tools(ctx)
 
 
 def _register_cli(ctx: Any) -> None:

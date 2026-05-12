@@ -1,0 +1,17 @@
+patterns:
+  - id: ignore_previous
+    regex: "(?i)ignore (previous|prior|all)(?: (instructions|context))?"
+  - id: disregard_above
+    regex: "(?i)disregard (the|all|previous) (above|instructions)"
+  - id: forget_instructions
+    regex: "(?i)forget (everything|your instructions|previous)"
+  - id: role_override
+    regex: "(?i)you are now"
+  - id: system_break
+    regex: "(?i)system\\s*:\\s*\\n"
+  - id: reveal_prompt
+    regex: "(?i)show me your (system prompt|instructions|rules)"
+  - id: fake_chat_tag
+    regex: "(?i)<\\s*/?\\s*(system|user|assistant)\\s*>"
+  - id: jailbreak_word
+    regex: "(?i)\\bjailbreak\\b"
