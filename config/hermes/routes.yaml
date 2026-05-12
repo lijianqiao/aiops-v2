@@ -1,0 +1,33 @@
+platforms:
+  webhook:
+    enabled: true
+    secret: ${WEBHOOK_GLOBAL_SECRET}
+    extra:
+      routes:
+        zabbix_linux:
+          path: /webhook/zabbix/linux
+          target_instance: hermes-linux
+          skills:
+            - linux-triage
+            - systemd-runbook
+          prompt: |
+            Zabbix 告警：
+            主机：{host.host} ({host.host_groups})
+            触发器：{trigger.name}
+            请先执行去重、CMDB 校验和风险识别，再决定是否进入后续自动化流程。
+        zabbix_network:
+          path: /webhook/zabbix/network
+          target_instance: hermes-network
+          skills:
+            - h3c-troubleshooting
+            - network-change-sop
+          prompt: |
+            Zabbix 网络告警：
+            设备：{host.host}
+            触发器：{trigger.name}
+            优先结合 NetBox 角色和厂商信息进行风险判定。
+        zabbix_p0_direct:
+          path: /webhook/zabbix/p0
+          deliver_only: true
+          target: feishu:oncall-group
+          prompt: "🚨 P0：{host.host} - {trigger.name}"

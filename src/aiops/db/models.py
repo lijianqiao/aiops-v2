@@ -50,7 +50,15 @@ class TimestampMixin:
 
 
 class Alert(Base):
-    """Raw upstream alert persisted for idempotency and audit."""
+    """Raw upstream alert persisted for idempotency and audit.
+
+    ``severity`` mirrors the upstream alert severity reported by Zabbix
+    (warning / high / disaster). ``risk_level`` is the platform-derived
+    execution risk floor (L1 / L2 / L3) used by Fast Path and the
+    Execution Policy Interceptor — the two fields must stay distinct so
+    SQL queries and Prometheus labels can distinguish source data from
+    derived decisions.
+    """
 
     __tablename__ = "alerts"
     __table_args__ = (
@@ -64,6 +72,7 @@ class Alert(Base):
     source: Mapped[str] = mapped_column(String(32), nullable=False)
     route_name: Mapped[str | None] = mapped_column(String(128), nullable=True)
     severity: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    risk_level: Mapped[str | None] = mapped_column(String(8), nullable=True, index=True)
     host: Mapped[str | None] = mapped_column(String(255), nullable=True)
     trigger_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     raw_payload: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)

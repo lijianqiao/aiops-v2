@@ -29,7 +29,7 @@ def _read_role() -> HermesRole:
     return Settings().hermes_instance
 
 
-def _register_always_on(ctx: Any) -> None:
+def _register_always_on(ctx: Any, role: HermesRole) -> None:
     """Register hooks and tools that every Hermes instance gets.
 
     Task 0 surface: the ``aiops_ping`` tool and a no-op ``post_tool_call``
@@ -37,7 +37,7 @@ def _register_always_on(ctx: Any) -> None:
     safety hooks here: ``pre_llm_call`` (prompt injection), kill-switch LLM
     layer, cost cap, and ``pre_tool_call`` (hallucination guard early-fail).
     """
-    ctx.register_hook("post_tool_call", hooks.log_post_tool_call)
+    hooks.register_safety_hooks(ctx, role=role)
 
     ctx.register_tool(
         name="aiops_ping",
@@ -56,7 +56,7 @@ def _register_gateway(ctx: Any) -> None:
     Task 4 fills in the real ``gateway:webhook_received`` body; Task 5
     fills in slash commands via ``ctx.register_command``.
     """
-    ctx.register_hook("gateway:webhook_received", hooks.ping)
+    hooks.register_webhook_hooks(ctx)
 
 
 def _register_linux(ctx: Any) -> None:
@@ -125,6 +125,6 @@ def register(ctx: Any) -> None:
     """
     role = _read_role()
 
-    _register_always_on(ctx)
+    _register_always_on(ctx, role)
     _ROLE_DISPATCH[role](ctx)
     _register_cli(ctx)

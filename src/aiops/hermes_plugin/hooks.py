@@ -1,9 +1,15 @@
-"""Minimal Hermes hook callbacks used for Task 0 boundary probing."""
+"""Hermes hook callbacks for observability, webhook handling, and lifecycle."""
 
 from __future__ import annotations
 
 from collections.abc import Mapping
 from typing import Any
+
+import structlog
+
+from aiops.gateway.hooks import dedupe_and_persist
+from aiops.gateway.services import build_service_bundle
+from aiops.lifecycle import shutdown
 
 
 def ping(*_: Any, **__: Any) -> None:
@@ -19,3 +25,55 @@ def log_post_tool_call(tool_name: str, params: Mapping[str, Any], result: Any, *
         result: Tool return payload.
     """
     del tool_name, params, result
+
+
+def register_safety_hooks(ctx: Any, *, role: str) -> None:
+    """Register hooks that every Hermes instance should get.
+
+    Args:
+        ctx: Hermes plugin registration context.
+        role: Active Hermes instance role.
+    """
+    del role
+    ctx.register_hook("post_tool_call", log_post_tool_call)
+
+
+async def on_webhook_received(payload: dict[str, Any], route_name: str, **_: Any) -> Any:
+    """Hermes lifecycle adapter for gateway webhook ingestion.
+
+    Args:
+        payload: Raw webhook payload.
+        route_name: Named Hermes route that matched the request.
+
+    Returns:
+        The gateway hook result, or ``None`` when the hook fails.
+    """
+    try:
+        service_bundle = await build_service_bundle()
+        return await dedupe_and_persist(payload, route_name, service_bundle)
+    except Exception as error:  # noqa: BLE001
+        structlog.get_logger().error("webhook_hook_failed", error=str(error), route_name=route_name)
+        return None
+
+
+async def on_gateway_shutdown(*_: Any, **__: Any) -> None:
+    """Hermes lifecycle adapter for orderly process shutdown.
+
+    Drains the shared resource registry (DB engine, Redis pool, NetBox
+    httpx client, future Scrapli / Temporal clients). Best-effort: if
+    Hermes does not emit ``gateway:shutdown`` for a given build the
+    process still functions, but pooled connections may not drain
+    gracefully on exit. ``atexit`` / signal-handler-based shutdown is
+    intentionally avoided because async cleanup outside a running event
+    loop is unsafe.
+    """
+    try:
+        await shutdown()
+    except Exception as error:  # noqa: BLE001
+        structlog.get_logger().error("aiops_shutdown_failed", error=str(error))
+
+
+def register_webhook_hooks(ctx: Any) -> None:
+    """Register gateway webhook hooks on the Hermes plugin context."""
+    ctx.register_hook("gateway:webhook_received", on_webhook_received)
+    ctx.register_hook("gateway:shutdown", on_gateway_shutdown)
