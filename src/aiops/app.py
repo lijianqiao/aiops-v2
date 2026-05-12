@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from aiops.logging import configure_logging
 from aiops.settings import Settings
 
 
@@ -19,7 +20,15 @@ class AppContainer:
 
 
 def build_app() -> AppContainer:
-    """Build the initial application container."""
+    """Build the initial application container.
+
+    Side effects:
+        Configures ``structlog`` + stdlib ``logging`` to emit JSON to stdout
+        before the rest of the process starts producing logs. The
+        configuration is idempotent — safe to call from tests or repeated
+        bootstrap paths.
+    """
+    configure_logging()
     return AppContainer(settings=Settings())
 
 

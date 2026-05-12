@@ -1,45 +1,41 @@
 """Hermes plugin entry point for AIOps integration.
 
 Per architecture §5.5: a single ``register(ctx)`` callable is exposed via the
-``hermes_agent.plugins`` entry-point group. ``register`` is called exactly once
-at Hermes startup and dispatches registration by the instance role declared in
-``AIOPS_HERMES_INSTANCE`` (gateway / linux / network / infra). This preserves
-the credential isolation principle from §6.3 while sharing a single code base.
+``hermes_agent.plugins`` entry-point group. ``register`` is called exactly
+once at Hermes startup and dispatches registration by the instance role
+declared in ``AIOPS_HERMES_INSTANCE`` (gateway / linux / network / infra).
+The role is read through the typed :class:`aiops.settings.Settings` model so
+that Pydantic validates the value once at the system edge — this is the
+single source of truth (architecture §5.5.4 / §6.3).
 """
 
 from __future__ import annotations
 
-import os
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
 from aiops.hermes_plugin import hooks, tools
-
-VALID_ROLES: frozenset[str] = frozenset({"gateway", "linux", "network", "infra"})
-DEFAULT_ROLE = "gateway"
-INSTANCE_ENV = "AIOPS_HERMES_INSTANCE"
+from aiops.settings import HermesRole, Settings
 
 
-def _read_role() -> str:
-    """Read and validate the instance role from the environment.
+def _read_role() -> HermesRole:
+    """Return the instance role from typed application settings.
 
-    Defaults to ``gateway`` when unset to keep dev / Task 0 probing painless.
-    Raises ``RuntimeError`` on an unknown role to fail loud rather than load
-    the wrong tool subset.
+    Pydantic validates the ``Literal`` membership at Settings construction
+    time, so an unknown role fails loud here rather than silently loading
+    the wrong subset.
     """
-    role = os.environ.get(INSTANCE_ENV, DEFAULT_ROLE).strip().lower()
-    if role not in VALID_ROLES:
-        raise RuntimeError(f"unknown {INSTANCE_ENV}={role!r}; expected one of {sorted(VALID_ROLES)}")
-    return role
+    return Settings().hermes_instance
 
 
 def _register_always_on(ctx: Any) -> None:
     """Register hooks and tools that every Hermes instance gets.
 
-    Task 0 surface: the ``aiops_ping`` tool and a no-op ``post_tool_call`` hook
-    act as a connectivity probe. Subsequent tasks (4 / 5 / 7) will add safety
-    hooks here: ``pre_llm_call`` (prompt injection), kill-switch LLM layer,
-    cost cap, and ``pre_tool_call`` (hallucination guard early-fail).
+    Task 0 surface: the ``aiops_ping`` tool and a no-op ``post_tool_call``
+    hook act as a connectivity probe. Subsequent tasks (4 / 5 / 7) add
+    safety hooks here: ``pre_llm_call`` (prompt injection), kill-switch LLM
+    layer, cost cap, and ``pre_tool_call`` (hallucination guard early-fail).
     """
     ctx.register_hook("post_tool_call", hooks.log_post_tool_call)
 
@@ -56,13 +52,11 @@ def _register_gateway(ctx: Any) -> None:
     """Register hooks and commands specific to the gateway role.
 
     The gateway instance owns webhook ingestion and the 飞书 Bot command
-    surface. Business tool credentials must NOT be loaded here (see §6.3).
+    surface. Business tool credentials must NOT be loaded here (§6.3).
     Task 4 fills in the real ``gateway:webhook_received`` body; Task 5
     fills in slash commands via ``ctx.register_command``.
     """
     ctx.register_hook("gateway:webhook_received", hooks.ping)
-    # Task 4: replace hooks.ping with the real dedupe-and-persist callback.
-    # Task 5: ctx.register_command(name=..., handler=..., description=...) for /incident, /wiki, etc.
 
 
 def _register_linux(ctx: Any) -> None:
@@ -110,7 +104,7 @@ def bundled_skill_paths() -> list[str]:
     return [str(skill_path)]
 
 
-_ROLE_DISPATCH = {
+_ROLE_DISPATCH: dict[HermesRole, Callable[[Any], None]] = {
     "gateway": _register_gateway,
     "linux": _register_linux,
     "network": _register_network,
@@ -122,9 +116,9 @@ def register(ctx: Any) -> None:
     """Register the AIOps Hermes plugin with role-aware loading.
 
     Hermes calls this exactly once at startup. Per §5.5.4 we dispatch by the
-    ``AIOPS_HERMES_INSTANCE`` environment variable so a single plugin package
-    can be deployed to four systemd units while keeping their tool subsets
-    (and therefore credential reach) physically isolated.
+    ``AIOPS_HERMES_INSTANCE`` environment variable so a single plugin
+    package can be deployed to four systemd units while keeping their tool
+    subsets (and therefore credential reach) physically isolated.
 
     Args:
         ctx: Hermes plugin registration context.
