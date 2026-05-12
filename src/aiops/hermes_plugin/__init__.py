@@ -29,9 +29,7 @@ def _read_role() -> str:
     """
     role = os.environ.get(INSTANCE_ENV, DEFAULT_ROLE).strip().lower()
     if role not in VALID_ROLES:
-        raise RuntimeError(
-            f"unknown {INSTANCE_ENV}={role!r}; expected one of {sorted(VALID_ROLES)}"
-        )
+        raise RuntimeError(f"unknown {INSTANCE_ENV}={role!r}; expected one of {sorted(VALID_ROLES)}")
     return role
 
 
