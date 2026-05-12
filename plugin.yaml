@@ -1,0 +1,22 @@
+name: aiops
+version: 0.1.0
+description: AIOps 智能自动化运维平台 — Hermes 集成插件
+author: aiops-team
+provides_tools:
+  # Task 0 boundary probe — always-on
+  - aiops_ping
+  # Task 5 read-only tools (registered by role: linux / network / infra)
+  # - get_disk_usage
+  # - get_systemd_status
+  # - get_interface_status
+  # - get_ospf_neighbors
+  # Task 9 write tools
+  # - restart_service
+  # - cleanup_disk
+  # - shutdown_interface
+provides_hooks:
+  - gateway:webhook_received
+  - post_tool_call
+  # Task 5+ : pre_llm_call (prompt injection), pre_tool_call (hallu guard early-fail)
+requires_env:
+  - AIOPS_HERMES_INSTANCE  # gateway | linux | network | infra — drives role-aware loading per §5.5.4

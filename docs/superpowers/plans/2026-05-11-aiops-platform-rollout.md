@@ -1,10 +1,19 @@
-# AIOps Platform Rollout Implementation Plan (v2)
+# AIOps Platform Rollout Implementation Plan (v2.1)
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Build the AIOps platform described in [docs/AIOps架构设计.md](../../AIOps架构设计.md) v3.4, in four phases. Each phase has an acceptance gate; do not move past a gate until all its tests pass.
+**Goal:** Build the AIOps platform described in [docs/AIOps架构设计.md](../../AIOps架构设计.md) v3.5, in four phases. Each phase has an acceptance gate; do not move past a gate until all its tests pass.
+
+**v2.1 corrections** (after first Ubuntu deployment attempt):
+
+- Hermes plugin uses a **single `register(ctx)` entry-point** + repo-root `plugin.yaml`, NOT three separate entry-points with decorators
+- Hooks registered imperatively via `ctx.register_hook(event_name, callback)` — never `@hook`
+- Tools require explicit JSON Schema dict + handler `(args, **kwargs) -> str` returning JSON string — never raise
+- Bot slash commands registered via `ctx.register_command(name, handler, description)` — `bot/skills/*.md` is for SOPs/Context Files only
+- `register(ctx)` reads `AIOPS_HERMES_INSTANCE` env var and registers role-specific subsets to preserve credential isolation (§5.5.4)
 
 **Architecture summary (must internalize before coding):**
+
 - All writes flow through Temporal Workflows. Mode A = synchronous (L1 no-approval only); Mode B = asynchronous (anything requiring approval, L2, L3). `requires_approval` decides Mode, not risk level.
 - Execution Policy Interceptor (Temporal Worker Interceptor) is the single safety chokepoint. Hermes Hooks only manage LLM-layer concerns.
 - Approval source of truth = Temporal workflow state. `approvals` PG table is mirror, written by Signal handler — never by Interceptor.
@@ -19,12 +28,14 @@
 ## File Structure
 
 **Repository files to modify**
+
 - Modify: `pyproject.toml` — runtime + dev deps, entry-points for Hermes plugin
 - Modify: `main.py` — bootstrap entrypoint
 - Modify: `README.md` — actual bootstrap and run instructions
 - Reference (do not modify after plan draft): `docs/AIOps架构设计.md`
 
 **Core package: `src/aiops/`**
+
 - `__init__.py`, `app.py`, `settings.py`, `logging.py`
 - `contracts/incidents.py` — `IncidentEnvelope`, `ExecutionContext`, `RepairAction`, `RepairPlan` (with `action_id`, `dry_run`, `requires_approval`)
 - `contracts/approvals.py` — `ApprovalDecision`, `ApprovalCard`
@@ -37,7 +48,7 @@
 - `plugins/read_only.py` — `get_disk_usage`, `get_systemd_status`, `get_interface_status`, `get_ospf_neighbors`
 - `plugins/write_tools.py` — `restart_service`, `cleanup_disk`, `shutdown_interface` (Activity-callable)
 - `plugins/sanitize.py` — prompt injection patterns + escape utilities
-- `bot/skills/` — Markdown skill files for `/incident`, `/staging`, `/wiki`, `/fastpath`, `/cost`, `/kill-switch`, `/memory`, `/approval`
+- `bot/incident_handlers.py`, `wiki_handlers.py`, `cost_handlers.py`, `staging_handlers.py`, `fastpath_handlers.py`, `killswitch_handlers.py`, `memory_handlers.py`, `approval_handlers.py` — async functions backing `ctx.register_command` registrations (commands are registered imperatively in `hermes_plugin/commands_registry.py`, **not** via Markdown skill files)
 - `temporal/client.py`, `temporal/workflows.py`, `temporal/activities.py`, `temporal/interceptor.py`, `temporal/submit.py`
 - `policy/loader.py` — load + validate `execution_policy.yaml`
 - `policy/blast_radius.py`, `policy/circuit_breaker.py`, `policy/kill_switch.py`
@@ -49,6 +60,7 @@
 - `cli/aiops_cli.py` — ops CLI (incl. `aiops-cli approval signal`)
 
 **Config files**
+
 - `.env.example`
 - `docker-compose.yml`
 - `config/hermes/routes.yaml` — matches §9.2 schema
@@ -60,20 +72,24 @@
 - `config/prometheus.yml`
 
 **Migrations**
+
 - `migrations/env.py`, `migrations/script.py.mako`, `migrations/versions/0001_initial.py`
 
 **Wiki seed**
+
 - `wiki/linux/_index.md`, `wiki/linux/disk-full-runbook.md`, `wiki/linux/systemd-troubleshooting.md`
 - `wiki/network/_index.md`, `wiki/network/h3c/_index.md`, `wiki/network/h3c/interface-flapping.md`, `wiki/network/h3c/ospf-neighbor-down.md`
 - `wiki/_staging/README.md`
 - `wiki/incidents/README.md`
 
 **Operational docs**
+
 - `docs/runbooks/hermes-bootstrap.md` — how Hermes loads our plugin (output of Task 0)
 - `docs/runbooks/operator-cli.md` — `aiops-cli` reference
 - `docs/eval/README.md` — Eval Pipeline operator guide
 
 **Tests**
+
 - `tests/conftest.py`
 - `tests/unit/test_settings.py`, `test_contracts.py`, `test_gateway_hooks.py`, `test_read_only_tools.py`
 - `tests/unit/test_sanitize.py`, `test_prompt_injection_hook.py`
@@ -107,79 +123,248 @@
 
 ### Task 0: Hermes Integration Boundary Probe (P0 — do not skip)
 
-**Why this exists first:** All subsequent hooks / tools / bot commands are loaded *by* Hermes. We must pin the integration surface before building anything against it.
+**Why this exists first:** All subsequent hooks / tools / bot commands are loaded *by* Hermes via a single `register(ctx)` entry. We must pin the integration surface (entry-point name, `plugin.yaml` manifest, `register(ctx)` signature) before building anything against it.
 
 **Files:**
-- Create: `src/aiops/hermes_plugin/__init__.py` (skeleton)
+
+- Create: `plugin.yaml` (**repo root** — required for directory-mode discovery)
+- Create: `src/aiops/hermes_plugin/__init__.py` (`register(ctx)` entry)
+- Create: `src/aiops/hermes_plugin/hooks.py` (skeleton with `register_safety_hooks` / `register_webhook_hooks`)
+- Create: `src/aiops/hermes_plugin/tools_registry.py` (skeleton with `register_<role>_tools`)
+- Create: `src/aiops/hermes_plugin/commands_registry.py` (skeleton with `register_bot_commands`)
 - Create: `docs/runbooks/hermes-bootstrap.md`
 - Test: `tests/integration/test_hermes_plugin_loads.py`
 
-- [ ] **Step 1: Install Hermes-Agent locally and identify SDK surface**
+- [ ] **Step 1: Install Hermes-Agent locally and pin SDK surface**
 
-  Read https://hermes-agent.nousresearch.com/docs and document in `docs/runbooks/hermes-bootstrap.md`:
-  - Confirm the current plugin API surface. Current docs indicate `ctx.register_hook(...)`, `ctx.register_tool(...)`, and `ctx.register_cli_command(...)` rather than decorator-based `@hook` / `@tool` imports.
-  - Plugin entry-point group name (`hermes_agent.plugins` per §5.5)
-  - Skill Markdown frontmatter required keys
-  - Config file location and webhook routes schema (cross-check vs §9.2)
-  - 飞书 platform config keys (`FEISHU_APP_ID`, etc., already in §7.2)
+  Document in `docs/runbooks/hermes-bootstrap.md` (cross-reference §5.5 of the architecture):
+  - Plugin discovery: 4 sources (bundled / user `~/.hermes/plugins/<name>/` / project `./.hermes/plugins/` / pip entry-point `hermes_agent.plugins`)
+  - Directory plugins require **both** `plugin.yaml` at root **and** `__init__.py` exposing `register(ctx)`
+  - pip plugins require entry-point pointing to a module that exposes `register(ctx)`
+  - Hermes registration API (per §5.5.1):
+    - `ctx.register_hook(event_name, callback)` — function, not decorator
+    - `ctx.register_tool(name, schema, handler)` — schema is JSON Schema dict; handler `(args, **kwargs) -> str` returning JSON string
+    - `ctx.register_command(name, handler, description)` — slash command for Bot
+    - `ctx.register_cli_command(name, setup_fn, handler_fn)` — `hermes <name>` subcommand
+  - Plugins are **disabled by default**; must add to `plugins.enabled` in `~/.hermes/config.yaml`
+  - Debugging: `HERMES_PLUGINS_DEBUG=1` for verbose discovery logs
 
-- [ ] **Step 2: Write the failing integration test**
+- [ ] **Step 2: Write the failing integration tests**
 
 ```python
 # tests/integration/test_hermes_plugin_loads.py
 import importlib.metadata
+import pathlib
+import yaml
 import pytest
 
+REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
+
 def test_aiops_plugin_registered_under_hermes_entry_point() -> None:
+    """Single entry-point `aiops` points to the plugin package."""
     eps = importlib.metadata.entry_points(group="hermes_agent.plugins")
-    names = {ep.name for ep in eps}
-  assert "aiops" in names
+    by_name = {ep.name: ep for ep in eps}
+    assert "aiops" in by_name
+    # entry-point value must point to the package that exports register(ctx)
+    assert by_name["aiops"].value == "aiops.hermes_plugin"
+
+def test_register_function_exists_and_is_callable() -> None:
+    from aiops.hermes_plugin import register
+    assert callable(register)
+
+def test_plugin_yaml_manifest_at_repo_root() -> None:
+    manifest = REPO_ROOT / "plugin.yaml"
+    assert manifest.exists(), "plugin.yaml must live at repo root for directory-mode discovery"
+    data = yaml.safe_load(manifest.read_text())
+    assert data["name"] == "aiops"
+    assert "version" in data
+    assert "provides_tools" in data
+    assert "provides_hooks" in data
+
+def test_register_dispatches_by_instance_role(monkeypatch) -> None:
+    """register(ctx) must read AIOPS_HERMES_INSTANCE and load role-specific subsets."""
+    from aiops.hermes_plugin import register
+    from unittest.mock import MagicMock
+
+    monkeypatch.setenv("AIOPS_HERMES_INSTANCE", "gateway")
+    ctx = MagicMock()
+    register(ctx)
+    # gateway role registers webhook hook + at least one bot command
+    hook_events = {call.args[0] for call in ctx.register_hook.call_args_list}
+    assert "gateway:webhook_received" in hook_events
+    assert ctx.register_command.called
 
 @pytest.mark.hermes_runtime
 def test_hermes_lists_our_plugin_via_cli() -> None:
-    """Run `hermes plugins list` and assert the aiops plugin appears."""
+    """With Hermes installed locally: `hermes plugins list` shows aiops without warning."""
     pytest.importorskip("hermes_agent")
     ...
 ```
 
-- [ ] **Step 3: Run test to verify failure**
-
-  Run: `uv run pytest tests/integration/test_hermes_plugin_loads.py -v`
-  Expected: FAIL — entry-points not registered yet.
-
-- [ ] **Step 4: Implement minimal plugin skeleton with hello-world hook + tool + skill**
-
-```python
-# src/aiops/hermes_plugin/__init__.py
-def register(ctx):
-  ctx.register_hook("gateway:webhook_received", hooks.ping)
-  ctx.register_tool(...)
-  if hasattr(ctx, "register_cli_command"):
-    ctx.register_cli_command(...)
-```
-
-  Add to `pyproject.toml`:
-```toml
-[project.entry-points."hermes_agent.plugins"]
-aiops = "aiops.hermes_plugin:register"
-```
-
-- [ ] **Step 5: Verify Hermes loads us**
+- [ ] **Step 3: Run tests to verify failure**
 
   Run: `uv run pytest tests/integration/test_hermes_plugin_loads.py -v -m "not hermes_runtime"`
-  Expected: PASS for entry-point registration.
+  Expected: FAIL — `plugin.yaml` missing, `aiops.hermes_plugin` does not exist yet.
 
-  Manual: `hermes plugins list` → confirm `aiops` appears.
+- [ ] **Step 4: Implement minimal `register(ctx)` with role dispatch + plugin.yaml**
+
+  Create `src/aiops/hermes_plugin/__init__.py`:
+
+```python
+import os
+
+def register(ctx):
+    """Hermes calls this exactly once at startup.
+
+    Hard rules per §5.5:
+      - Never raise here — if we crash, the plugin is disabled but Hermes keeps running.
+        Still, log loudly via ctx if anything is unhealthy.
+      - Read AIOPS_HERMES_INSTANCE to register role-specific subsets (preserve credential isolation per §6.3).
+    """
+    role = os.environ.get("AIOPS_HERMES_INSTANCE", "gateway")
+
+    # Always-on: safety hooks (kill_switch LLM layer + prompt injection sanitizer + cost cap)
+    from . import hooks
+    hooks.register_safety_hooks(ctx, role=role)
+
+    if role == "gateway":
+        hooks.register_webhook_hooks(ctx)
+        from . import commands_registry
+        commands_registry.register_bot_commands(ctx)
+    elif role == "linux":
+        from . import tools_registry
+        tools_registry.register_linux_tools(ctx)
+    elif role == "network":
+        from . import tools_registry
+        tools_registry.register_network_tools(ctx)
+    elif role == "infra":
+        from . import tools_registry
+        tools_registry.register_infra_tools(ctx)
+    else:
+        raise RuntimeError(f"unknown AIOPS_HERMES_INSTANCE={role!r}")
+```
+
+  Create skeleton sibling modules so imports succeed (real bodies come in later tasks):
+
+```python
+# src/aiops/hermes_plugin/hooks.py
+def register_safety_hooks(ctx, role: str) -> None:
+    """Hooks every instance gets. Real implementations land in Tasks 4 / 5 / 7."""
+    # Phase 1 ping placeholder so wiring is testable
+    ctx.register_hook("session:start", _ping)
+
+def register_webhook_hooks(ctx) -> None:
+    ctx.register_hook("gateway:webhook_received", _noop_webhook)
+
+def _ping(*args, **kwargs):
+    return None
+
+def _noop_webhook(*args, **kwargs):
+    return None
+```
+
+```python
+# src/aiops/hermes_plugin/tools_registry.py
+def register_linux_tools(ctx) -> None:    pass  # Task 5 / 9
+def register_network_tools(ctx) -> None:  pass  # Task 5 / 9
+def register_infra_tools(ctx) -> None:    pass  # Task 5
+```
+
+```python
+# src/aiops/hermes_plugin/commands_registry.py
+import json
+
+PING_SCHEMA_DESC = "Liveness check"
+
+def _ping_handler(args: dict, **kwargs) -> str:
+    return json.dumps({"ok": True, "msg": "pong"})
+
+def register_bot_commands(ctx) -> None:
+    ctx.register_command(
+        name="aiops-ping",
+        handler=_ping_handler,
+        description="AIOps plugin liveness check",
+    )
+```
+
+  Add to `pyproject.toml` (single entry-point, name must match plugin.yaml name):
+
+```toml
+[project]
+name = "aiops"            # NOT aiops-v2 — must match plugin.yaml.name
+
+[project.entry-points."hermes_agent.plugins"]
+aiops = "aiops.hermes_plugin"
+```
+
+  Create `plugin.yaml` at repo root:
+
+```yaml
+name: aiops
+version: 0.1.0
+description: AIOps platform — Zabbix alerts → Hermes analysis → Temporal execution
+provides_tools:
+  # Read-only (Task 5)
+  - get_disk_usage
+  - get_systemd_status
+  - get_interface_status
+  - get_ospf_neighbors
+  # Write (Task 9)
+  - restart_service
+  - cleanup_disk
+  - shutdown_interface
+provides_hooks:
+  - session:start
+  - gateway:webhook_received
+  - pre_llm_call
+  - pre_tool_call
+  - post_tool_call
+requires_env:
+  - AIOPS_HERMES_INSTANCE      # gateway | linux | network | infra
+  - AIOPS_DATABASE_URL
+  - AIOPS_REDIS_URL
+  - AIOPS_TEMPORAL_TARGET
+  - AIOPS_NETBOX_URL
+```
+
+- [ ] **Step 5: Verify locally**
+
+  Run: `uv run pytest tests/integration/test_hermes_plugin_loads.py -v -m "not hermes_runtime"`
+  Expected: PASS for all 4 entry-point + manifest + register + role-dispatch tests.
+
+  On Ubuntu VM with Hermes installed:
+
+```bash
+cd ~/path/to/aiops-v2
+uv pip install -e .
+# enable
+mkdir -p ~/.hermes && touch ~/.hermes/config.yaml
+yq -i '.plugins.enabled += ["aiops"]' ~/.hermes/config.yaml   # or hand-edit
+# per-instance role (default gateway for the probe)
+export AIOPS_HERMES_INSTANCE=gateway
+# verify
+hermes plugins list
+HERMES_PLUGINS_DEBUG=1 hermes session start 2>&1 | grep -i aiops
+```
+
+  Expected: `aiops` appears with **no `no plugin.yaml / __init__.py` warning**.
 
 - [ ] **Step 6: Document findings in `docs/runbooks/hermes-bootstrap.md`**
 
-  Include: current registration-context API, skill file template, where to drop our `bot/skills/*.md`, how Hermes discovers webhook routes YAML, expected env vars.
+  Cover:
+  - Discovery sources order (bundled → user → project → pip entry-point)
+  - directory-mode requirements (`plugin.yaml` + `__init__.py` at the **scanned root**)
+  - Why we use hybrid mode (pip entry-point + repo-root `plugin.yaml`)
+  - How to enable a plugin (`~/.hermes/config.yaml`)
+  - How `AIOPS_HERMES_INSTANCE` env var selects the role-specific subset
+  - Local dev workflow: `ln -s ~/work/aiops-v2 ~/.hermes/plugins/aiops` for hot iteration
+  - Tool handler hard rules: JSON string return, never raise, accept `**kwargs`
 
 - [ ] **Step 7: Commit**
 
 ```bash
-git add pyproject.toml src/aiops/hermes_plugin docs/runbooks/hermes-bootstrap.md tests/integration/test_hermes_plugin_loads.py
-git commit -m "feat: hermes plugin entry-point + integration boundary doc"
+git add plugin.yaml pyproject.toml src/aiops/hermes_plugin docs/runbooks/hermes-bootstrap.md tests/integration/test_hermes_plugin_loads.py
+git commit -m "feat(hermes): single-entry plugin with register(ctx) + role-aware loading + plugin.yaml manifest"
 ```
 
 ---
@@ -187,10 +372,12 @@ git commit -m "feat: hermes plugin entry-point + integration boundary doc"
 ### Task 1: Project Skeleton + Full Dependencies
 
 **Files:**
-- Modify: `pyproject.toml`
+
+- Modify: `pyproject.toml` — keep the **single** `aiops` entry-point from Task 0; do NOT re-introduce per-area entry-points
 - Modify: `main.py`
 - Modify: `README.md`
 - Create: `src/aiops/__init__.py`, `src/aiops/app.py`
+- Pre-existing (from Task 0, do not touch): `plugin.yaml`, `src/aiops/hermes_plugin/__init__.py`
 
 - [ ] **Step 1: Write the failing bootstrap test**
 
@@ -273,9 +460,9 @@ dependencies = [
 ]
 
 [project.entry-points."hermes_agent.plugins"]
-aiops_hooks = "aiops.hermes_plugin:register_hooks"
-aiops_tools = "aiops.hermes_plugin:register_tools"
-aiops_bot   = "aiops.hermes_plugin:register_bot_commands"
+# Single entry-point (see §5.5). Points to the package; Hermes will call its register(ctx).
+# DO NOT split into multiple entry-points — Hermes loads one register() per plugin.
+aiops = "aiops.hermes_plugin"
 
 [project.scripts]
 aiops-cli = "aiops.cli.aiops_cli:main"
@@ -318,6 +505,7 @@ git commit -m "chore: project skeleton with full runtime + dev deps"
 ### Task 2: Typed Settings + Structured Logging
 
 **Files:**
+
 - Create: `src/aiops/settings.py`, `src/aiops/logging.py`, `.env.example`
 - Test: `tests/unit/test_settings.py`
 
@@ -408,6 +596,7 @@ git commit -m "feat: typed settings covering all infra + structlog json logging"
 ### Task 3: Contracts + Full DB Schema + Alembic
 
 **Files:**
+
 - Create: `src/aiops/contracts/incidents.py`, `contracts/approvals.py`, `contracts/bot.py`
 - Create: `src/aiops/db/models.py`, `db/session.py`, `db/repositories.py`
 - Create: `migrations/env.py`, `migrations/script.py.mako`, `migrations/versions/0001_initial.py`
@@ -499,6 +688,7 @@ git commit -m "feat: incident contracts (action_id/dry_run/requires_approval) + 
 ### Task 4: Webhook Adapter Gateway Hooks
 
 **Files:**
+
 - Create: `src/aiops/gateway/hooks.py`, `gateway/routes.py`
 - Create: `src/aiops/cmdb/netbox_client.py` (stub with mock-friendly interface)
 - Create: `config/hermes/routes.yaml`
@@ -586,9 +776,32 @@ platforms:
           prompt: "🚨 P0：{host.host} - {trigger.name}"
 ```
 
-- [ ] **Step 5: Wire hook into hermes_plugin/hooks.py**
+- [ ] **Step 5: Wire hook into `hermes_plugin/hooks.py` via `ctx.register_hook`**
 
-  Register `dedupe_and_persist` under `@hook("gateway:webhook_received")`.
+  No decorators — Hermes uses imperative registration (per §5.5.1).
+  Replace the Task 0 placeholder `_noop_webhook` in `register_webhook_hooks(ctx)`:
+
+```python
+# src/aiops/hermes_plugin/hooks.py
+from aiops.gateway.hooks import dedupe_and_persist as _dedupe_and_persist
+from aiops.gateway.services import build_service_bundle
+
+async def _on_webhook_received(payload: dict, route_name: str, **kwargs):
+    """Hermes lifecycle adapter: build services lazily, never raise."""
+    try:
+        services = await build_service_bundle()  # holds db / redis / netbox handles
+        return await _dedupe_and_persist(payload, route_name, services)
+    except Exception as e:                       # never raise out of a Hermes hook
+        # log + emit metric; let Hermes continue with the raw payload
+        import structlog; structlog.get_logger().error("webhook_hook_failed", error=str(e))
+        return None
+
+def register_webhook_hooks(ctx) -> None:
+    ctx.register_hook("gateway:webhook_received", _on_webhook_received)
+```
+
+  Hook callable signature mirrors Hermes lifecycle event: `(payload, route_name, **kwargs)`.
+  Hook must **never raise** — catch internally and return `None` on failure (Hermes contract per §5.5.1).
 
 - [ ] **Step 6: Tests pass**
 
@@ -608,8 +821,9 @@ git commit -m "feat: gateway hooks with event_id idempotency + netbox-driven ris
 ### Task 5: Read-Only Tools + Bot Commands + Prompt Injection Defense + Wiki Seed
 
 **Files:**
+
 - Create: `src/aiops/plugins/read_only.py`, `plugins/sanitize.py`
-- Create: `src/aiops/bot/skills/*.md` (incident, wiki, cost, ping)
+- Create: `src/aiops/bot/incident_handlers.py`, `wiki_handlers.py`, `cost_handlers.py` (async functions returning dicts; registered by `commands_registry.py` per §5.5)
 - Create: `src/aiops/hermes_plugin/hooks.py` — `pre_llm_call` for injection sanitization
 - Create: `config/injection_patterns.yaml`
 - Create: `wiki/linux/_index.md`, `wiki/linux/disk-full-runbook.md`, `wiki/linux/systemd-troubleshooting.md`
@@ -653,33 +867,118 @@ async def test_get_disk_usage_returns_structured_payload(fake_ssh) -> None:
   - `sanitize_untrusted(text: str) -> str` — truncate + pattern blacklist + escape control chars
   - `escape_prompt_special_chars(text: str) -> str`
 
-- [ ] **Step 4: Implement `pre_llm_call` hook in hermes_plugin/hooks.py**
+- [ ] **Step 4: Register `pre_llm_call` hook in `hermes_plugin/hooks.py`**
 
-  Register injection sanitization hook. Emit `prompt_injection_blocked_total{pattern}` metric.
+  Imperative registration via `ctx.register_hook`, **not** decorators:
 
-- [ ] **Step 5: Implement read-only tools as Scrapli/SSH wrappers**
+```python
+# src/aiops/hermes_plugin/hooks.py (extend register_safety_hooks)
+from aiops.plugins.sanitize import sanitize_untrusted_payload
 
-  - `get_disk_usage(host)` — SSH `df -h` parse
-  - `get_systemd_status(host, service)` — SSH `systemctl status` parse
-  - `get_interface_status(device, interface)` — Scrapli `display interface`
-  - `get_ospf_neighbors(device)` — Scrapli `display ospf peer`
+async def _on_pre_llm_call(session_id: str, user_message: str, conversation_history, **kwargs):
+    """Sanitize untrusted blocks in the prompt. Never raise (Hermes contract)."""
+    try:
+        return sanitize_untrusted_payload(user_message, conversation_history)
+    except Exception as e:
+        import structlog; structlog.get_logger().error("sanitize_failed", error=str(e))
+        return None  # let original prompt through; safety hooks below still apply
 
-  All return typed dicts. Take optional `ssh=` / `driver=` parameter for test injection.
+def register_safety_hooks(ctx, role: str) -> None:
+    ctx.register_hook("pre_llm_call", _on_pre_llm_call)
+    # cost cap / kill switch llm-layer hooks registered here too (Task 7 / 8)
+```
 
-- [ ] **Step 6: Bot skill files**
+  Emit `prompt_injection_blocked_total{pattern}` from inside `sanitize_untrusted_payload`.
 
-  Create Markdown skills in `src/aiops/bot/skills/`:
-  - `ping.md` (command: `/aiops ping`)
-  - `incident-list.md` (command: `/incident list`)
-  - `incident-detail.md` (command: `/incident <id>`)
-  - `wiki-search.md` (command: `/wiki search`)
-  - `cost-report.md` (command: `/cost report`)
+- [ ] **Step 5: Implement read-only tools per §5.5.5 contract (JSON string return, never raise)**
 
-  Each with frontmatter per §5.5 Hermes skill format. Body wraps untrusted blocks per §17.4.
+  Each tool is a regular function — **no decorator**. Schema declared as JSON Schema dict alongside:
+
+```python
+# src/aiops/plugins/read_only.py
+import json
+from typing import Any
+
+GET_DISK_USAGE_SCHEMA: dict[str, Any] = {
+    "name": "get_disk_usage",
+    "description": "Read df -h output on a Linux host. Returns array of mount points.",
+    "parameters": {
+        "type": "object",
+        "properties": {"host": {"type": "string", "description": "Hostname in NetBox"}},
+        "required": ["host"],
+    },
+}
+
+async def get_disk_usage(args: dict, **kwargs) -> str:
+    """Tool handler — hard rules per §5.5.5:
+      - Always return JSON string (success or error)
+      - Never raise
+      - Accept **kwargs for forward compat
+    """
+    try:
+        host = args["host"]
+        rows = await _ssh_df_h(host)   # implementation detail; injectable for tests
+        return json.dumps({"ok": True, "rows": rows})
+    except KeyError as e:
+        return json.dumps({"ok": False, "error": f"missing arg: {e}"})
+    except Exception as e:
+        return json.dumps({"ok": False, "error": str(e)})
+```
+
+  Repeat the schema-+-handler pair for `get_systemd_status`, `get_interface_status`, `get_ospf_neighbors`.
+
+  Register in `tools_registry.py`:
+
+```python
+# src/aiops/hermes_plugin/tools_registry.py
+from aiops.plugins import read_only
+
+def register_linux_tools(ctx) -> None:
+    ctx.register_tool(name="get_disk_usage",     schema=read_only.GET_DISK_USAGE_SCHEMA,     handler=read_only.get_disk_usage)
+    ctx.register_tool(name="get_systemd_status", schema=read_only.GET_SYSTEMD_STATUS_SCHEMA, handler=read_only.get_systemd_status)
+
+def register_network_tools(ctx) -> None:
+    ctx.register_tool(name="get_interface_status", schema=read_only.GET_INTERFACE_STATUS_SCHEMA, handler=read_only.get_interface_status)
+    ctx.register_tool(name="get_ospf_neighbors",   schema=read_only.GET_OSPF_NEIGHBORS_SCHEMA,   handler=read_only.get_ospf_neighbors)
+
+def register_infra_tools(ctx) -> None: ...
+```
+
+- [ ] **Step 6: Bot slash commands via `ctx.register_command`**
+
+  **No Markdown skill files** for command routing — Hermes commands are registered imperatively. (Skill Markdown is for SOPs / Context Files, see §15.)
+
+```python
+# src/aiops/hermes_plugin/commands_registry.py
+import json
+from aiops.bot import incident_handlers, wiki_handlers, cost_handlers, killswitch_handlers, approval_handlers
+
+def _handler(fn):
+    """Wrap async handlers so they always return JSON strings (§5.5.5)."""
+    async def wrapped(args: dict, **kwargs) -> str:
+        try:
+            data = await fn(args, **kwargs)
+            return json.dumps({"ok": True, **data})
+        except Exception as e:
+            return json.dumps({"ok": False, "error": str(e)})
+    return wrapped
+
+def register_bot_commands(ctx) -> None:
+    # Phase 1 read-only commands
+    ctx.register_command(name="incident",   handler=_handler(incident_handlers.dispatch), description="Query incidents: /incident list | /incident <id>")
+    ctx.register_command(name="wiki",       handler=_handler(wiki_handlers.search),       description="Search wiki: /wiki search <kw>")
+    ctx.register_command(name="cost",       handler=_handler(cost_handlers.report),       description="Cost report: /cost report [--today]")
+    # Phase 2+ commands (stubs OK in Task 5):
+    ctx.register_command(name="kill-switch", handler=_handler(killswitch_handlers.dispatch), description="Kill switch ops")
+    ctx.register_command(name="approval",    handler=_handler(approval_handlers.signal),    description="Manual approval signal (degradation path)")
+```
+
+  Each handler module (`aiops.bot.incident_handlers` etc.) exposes a pure async function taking `(args, **kwargs)` and returning a dict. The `_handler` wrapper turns it into the JSON-string contract.
 
 - [ ] **Step 7: Wiki seed**
 
   Each file uses the §15.2 frontmatter format:
+
 ```markdown
 ---
 title: H3C OSPF 邻居 down 排障
@@ -730,6 +1029,7 @@ git commit -m "feat: phase1 read-only tools + bot skills + prompt injection defe
 ### Task 6: Phase 1 Acceptance Gate (full docker-compose + E2E)
 
 **Files:**
+
 - Modify: `README.md`
 - Create: `docker-compose.yml`, `config/prometheus.yml`
 - Create: `scripts/seed_netbox.py`
@@ -842,6 +1142,7 @@ git commit -m "chore: phase1 acceptance — full docker-compose + e2e readonly b
 ### Task 7: Temporal Foundation + submit_to_temporal (5 routing branches)
 
 **Files:**
+
 - Create: `src/aiops/temporal/client.py`, `temporal/workflows.py`, `temporal/activities.py`, `temporal/submit.py`
 - Test: `tests/unit/test_submit_to_temporal.py`
 
@@ -912,6 +1213,7 @@ git commit -m "feat: temporal foundation + submit_to_temporal with 5-branch rout
 ### Task 8: Execution Policy Interceptor (8+ tests covering §11.5)
 
 **Files:**
+
 - Create: `src/aiops/temporal/interceptor.py`
 - Create: `src/aiops/policy/loader.py`, `policy/blast_radius.py`, `policy/circuit_breaker.py`, `policy/kill_switch.py`
 - Create: `config/execution_policy.yaml`, `config/kill_switch_scopes.yaml`
@@ -1060,6 +1362,7 @@ git commit -m "feat: execution policy interceptor (hallu→killswitch→cache→
 ### Task 9: Fast Path Classifier + Scheduler + L1 Auto-Exec E2E
 
 **Files:**
+
 - Create: `src/aiops/fastpath/rules.py`, `fastpath/classifier.py`, `fastpath/scheduler.py`
 - Create: `src/aiops/plugins/write_tools.py`
 - Create: `config/fastpath_rules.yaml`
@@ -1196,11 +1499,12 @@ git commit -m "feat: fastpath classifier/scheduler split + L1 autoexec e2e"
 ### Task 10: L2/L3 Approval + Signal Handler + Approvals Mirror + Replay Drill
 
 **Files:**
+
 - Create: `src/aiops/approval/signals.py`
 - Modify: `src/aiops/temporal/workflows.py`, `temporal/activities.py`
 - Modify: `src/aiops/hermes_plugin/hooks.py` — feishu card callback handler
 - Create: `src/aiops/cli/aiops_cli.py` — `aiops-cli approval signal`
-- Modify: `src/aiops/bot/skills/` — add `/staging`, `/approval`, `/kill-switch` skills
+- Create: `src/aiops/bot/staging_handlers.py`, `approval_handlers.py`, `killswitch_handlers.py`; extend `commands_registry.register_bot_commands(ctx)` with the new handlers
 - Tests: `tests/unit/test_approval_signals.py`, `test_signal_idempotency.py`, `test_approvals_mirror_writer.py`
 - Test: `tests/integration/test_phase3_approval_replay.py`
 
@@ -1244,12 +1548,14 @@ async def test_interceptor_does_not_touch_approvals_table(fake_db, interceptor) 
 
   - `ApprovalDecision`: `decision: Literal["approve", "reject", "revise"]`, `reason: str` (required if reject), `revised_args: dict | None`, `approver_user_id: str`
   - `ApprovedActionWorkflow`: workflow internal state machine
+
     ```
     Start → render_card_activity → wait_signal("approval_decision", timeout=2h)
        → approved: execute → verify → done
        → revise: re-render with revised_args, wait again
        → reject / timer: rejected
     ```
+
   - Signal handler writes mirror to `approvals` table via Activity (so it's part of replayable workflow state).
 
 - [ ] **Step 5: 飞书 Card callback handler in hermes_plugin/hooks.py**
@@ -1332,9 +1638,10 @@ git commit -m "feat: phase3 approval signals + workflow state machine + mirror w
 ### Task 11: Phase 4 — Memory Lifecycle + Eval Pipeline + Wiki Staging Review
 
 **Files:**
+
 - Create: `src/aiops/memory/lifecycle.py`
 - Create: `src/aiops/eval/sampler.py`, `eval/runner.py`
-- Modify: `src/aiops/bot/skills/` — add `/staging review`, `/wiki pr list`, `/memory purge`, `/eval run`
+- Create / extend: `src/aiops/bot/staging_handlers.py`, `wiki_pr_handlers.py`, `memory_handlers.py`, `eval_handlers.py`; extend `commands_registry.register_bot_commands(ctx)` accordingly
 - Create: `docs/eval/README.md`
 - Create: `.github/workflows/eval-gate.yml` — CI eval regression gate
 - Tests: `tests/unit/test_memory_lifecycle.py`, `test_eval_sampler.py`
@@ -1402,7 +1709,8 @@ on:
       - "config/hermes/routes.yaml"
       - "config/fastpath_rules.yaml"
       - "wiki/**"
-      - "src/aiops/bot/skills/**"
+      - "src/aiops/bot/**"
+      - "src/aiops/hermes_plugin/commands_registry.py"
 jobs:
   eval-regression:
     runs-on: ubuntu-latest
@@ -1476,4 +1784,4 @@ git commit -m "feat: phase4 memory lifecycle + eval pipeline + ci regression gat
   Expected: CLI shows `approval signal` and `kill-switch` subcommands.
 
 - [ ] Manual: `hermes plugins list` (in environment with Hermes installed)
-  Expected: `aiops_hooks / aiops_tools / aiops_bot` all listed and healthy.
+  Expected: `aiops` plugin listed, no `no plugin.yaml / __init__.py` warning.

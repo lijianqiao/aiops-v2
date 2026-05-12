@@ -1,37 +1,50 @@
-"""Hermes plugin entry point for AIOps integration boundary probing."""
+"""Hermes plugin entry point for AIOps integration.
+
+Per architecture §5.5: a single ``register(ctx)`` callable is exposed via the
+``hermes_agent.plugins`` entry-point group. ``register`` is called exactly once
+at Hermes startup and dispatches registration by the instance role declared in
+``AIOPS_HERMES_INSTANCE`` (gateway / linux / network / infra). This preserves
+the credential isolation principle from §6.3 while sharing a single code base.
+"""
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Any
 
 from aiops.hermes_plugin import hooks, tools
 
+VALID_ROLES: frozenset[str] = frozenset({"gateway", "linux", "network", "infra"})
+DEFAULT_ROLE = "gateway"
+INSTANCE_ENV = "AIOPS_HERMES_INSTANCE"
 
-def _register_hooks(ctx: Any) -> list[str]:
-    """Register minimal Hermes hooks for Task 0.
 
-    Args:
-        ctx: Hermes plugin context.
+def _read_role() -> str:
+    """Read and validate the instance role from the environment.
 
-    Returns:
-        Hook names exposed by the plugin.
+    Defaults to ``gateway`` when unset to keep dev / Task 0 probing painless.
+    Raises ``RuntimeError`` on an unknown role to fail loud rather than load
+    the wrong tool subset.
     """
-    ctx.register_hook("gateway:webhook_received", hooks.ping)
+    role = os.environ.get(INSTANCE_ENV, DEFAULT_ROLE).strip().lower()
+    if role not in VALID_ROLES:
+        raise RuntimeError(
+            f"unknown {INSTANCE_ENV}={role!r}; expected one of {sorted(VALID_ROLES)}"
+        )
+    return role
+
+
+def _register_always_on(ctx: Any) -> None:
+    """Register hooks and tools that every Hermes instance gets.
+
+    Task 0 surface: the ``aiops_ping`` tool and a no-op ``post_tool_call`` hook
+    act as a connectivity probe. Subsequent tasks (4 / 5 / 7) will add safety
+    hooks here: ``pre_llm_call`` (prompt injection), kill-switch LLM layer,
+    cost cap, and ``pre_tool_call`` (hallucination guard early-fail).
+    """
     ctx.register_hook("post_tool_call", hooks.log_post_tool_call)
 
-    return ["gateway:webhook_received", "post_tool_call"]
-
-
-def _register_tools(ctx: Any) -> list[str]:
-    """Register a minimal ping tool for Task 0.
-
-    Args:
-        ctx: Hermes plugin context.
-
-    Returns:
-        Tool names exposed by the plugin.
-    """
     ctx.register_tool(
         name="aiops_ping",
         toolset="aiops",
@@ -40,21 +53,49 @@ def _register_tools(ctx: Any) -> list[str]:
         description="Return a static pong payload for AIOps Hermes integration checks.",
     )
 
-    return ["aiops_ping"]
+
+def _register_gateway(ctx: Any) -> None:
+    """Register hooks and commands specific to the gateway role.
+
+    The gateway instance owns webhook ingestion and the 飞书 Bot command
+    surface. Business tool credentials must NOT be loaded here (see §6.3).
+    Task 4 fills in the real ``gateway:webhook_received`` body; Task 5
+    fills in slash commands via ``ctx.register_command``.
+    """
+    ctx.register_hook("gateway:webhook_received", hooks.ping)
+    # Task 4: replace hooks.ping with the real dedupe-and-persist callback.
+    # Task 5: ctx.register_command(name=..., handler=..., description=...) for /incident, /wiki, etc.
 
 
-def _register_cli(ctx: Any) -> list[str]:
-    """Register the Task 0 plugin CLI surface.
+def _register_linux(ctx: Any) -> None:
+    """Register Linux / Windows server tools. Filled in by Task 5 (read-only) and Task 9 (writes)."""
+    # Task 5: ctx.register_tool(name="get_disk_usage", schema=..., handler=...)
+    # Task 5: ctx.register_tool(name="get_systemd_status", schema=..., handler=...)
+    # Task 9: ctx.register_tool(name="restart_service", schema=..., handler=...)
+    # Task 9: ctx.register_tool(name="cleanup_disk", schema=..., handler=...)
+    return None
 
-    Hermes currently exposes plugin CLI registration via ``ctx.register_cli_command``.
-    Task 0 does not add a live command tree yet; this only proves the plugin can
-    register optional CLI integration without failing discovery.
 
-    Args:
-        ctx: Hermes plugin context.
+def _register_network(ctx: Any) -> None:
+    """Register network device tools (H3C / Huawei / Cisco). Filled in by Task 5 / 9."""
+    # Task 5: ctx.register_tool(name="get_interface_status", ...)
+    # Task 5: ctx.register_tool(name="get_ospf_neighbors", ...)
+    # Task 9: ctx.register_tool(name="shutdown_interface", ...)
+    return None
 
-    Returns:
-        Registered CLI root names.
+
+def _register_infra(ctx: Any) -> None:
+    """Register DB / Zabbix-self tools. Filled in by Task 5."""
+    # Task 5: ctx.register_tool(name="pg_check_replication_lag", ...)
+    # Task 5: ctx.register_tool(name="redis_inspect_memory", ...)
+    return None
+
+
+def _register_cli(ctx: Any) -> None:
+    """Register the ``hermes aiops`` CLI surface.
+
+    Hermes exposes plugin CLI registration via ``ctx.register_cli_command``.
+    Task 0 only proves the binding works; real subcommands land in Task 10.
     """
     if hasattr(ctx, "register_cli_command"):
         ctx.register_cli_command(
@@ -64,8 +105,6 @@ def _register_cli(ctx: Any) -> list[str]:
             handler_fn=lambda args: args,
         )
 
-    return ["aiops"]
-
 
 def bundled_skill_paths() -> list[str]:
     """Return the plugin-bundled skill files shipped with the package."""
@@ -73,14 +112,27 @@ def bundled_skill_paths() -> list[str]:
     return [str(skill_path)]
 
 
-def register(ctx: Any) -> None:
-    """Register the full AIOps Hermes plugin.
+_ROLE_DISPATCH = {
+    "gateway": _register_gateway,
+    "linux": _register_linux,
+    "network": _register_network,
+    "infra": _register_infra,
+}
 
-    Hermes expects one plugin entry point whose target exposes ``register(ctx)``.
+
+def register(ctx: Any) -> None:
+    """Register the AIOps Hermes plugin with role-aware loading.
+
+    Hermes calls this exactly once at startup. Per §5.5.4 we dispatch by the
+    ``AIOPS_HERMES_INSTANCE`` environment variable so a single plugin package
+    can be deployed to four systemd units while keeping their tool subsets
+    (and therefore credential reach) physically isolated.
 
     Args:
         ctx: Hermes plugin registration context.
     """
-    _register_hooks(ctx)
-    _register_tools(ctx)
+    role = _read_role()
+
+    _register_always_on(ctx)
+    _ROLE_DISPATCH[role](ctx)
     _register_cli(ctx)
