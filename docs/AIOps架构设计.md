@@ -252,9 +252,9 @@ class RepairPlan(BaseModel):
     requires_approval: bool            # **同步/异步的决策位**，Mode 路由由它决定
     dry_run: bool = False              # **顶层模拟开关**——所有 Workflow 识别（详见 §11.6）
     root_cause: str
-    actions: list[RepairAction]
+    actions: list[RepairAction] = Field(min_length=1)   # 不允许空——只读评估属于独立 artifact
     confidence: float = Field(ge=0, le=1)
-    reference_skills: list[str]        # 必须引用 ≥ 1 个 wiki SOP
+    reference_skills: list[str] = Field(min_length=1)   # 必须引用 ≥ 1 个 wiki SOP
 ```
 
 **三个 ID 的层级**：
